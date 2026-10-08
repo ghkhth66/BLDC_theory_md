@@ -1,330 +1,304 @@
-# RX26T Tracer Porting 변경 내역 및 검증 절차
+# RX26T Sensorless Startup Tracer Porting Guide
 
-작성일: 2026-10-08
-
----
-
-# 1. 목적
-
-본 문서는 Panasonic Micom 기반 Tracer Framework를 Renesas RX26T 프로젝트에 이식하면서 변경한 내용을 정리하고 향후 검증 절차를 정의하기 위한 문서이다.
-
-현재 상태:
-
-```text
-컴파일 성공
-링크 성공
-HEX 생성 성공
-
-Build Error = 0
-```
-
-따라서 현재 단계는
-
-```text
-구현 단계
-→ 완료
-
-검증 단계
-→ 진행
-```
-
-이다.
+작성일 : 2026-10-08
 
 ---
 
-# 2. Porting 기본 원칙
+# 1. 문서 목적
 
-## 기준
+본 문서는 Panasonic 기반 Sensorless Startup Tracer를
+Renesas RX26T 플랫폼으로 이식하면서 변경한 내용과
+검증 절차를 정리한다.
+
+본 Tracer는 단순 Waveform Logger가 아니다.
+
+센서리스 제어의 핵심 이벤트인
+
+- Align
+- I/F Startup
+- FOC Transition
+- Stable Sensorless
+
+구간을 기준으로
 
 ```text
-Panasonic Micom
+무엇을 볼 것인가?
+언제를 기준으로 할 것인가?
+언제 저장할 것인가?
+```
+
+를 분리하여 분석하기 위한 시스템이다.
+
+---
+
+# 2. Tracer 기본 철학
+
+Tracer는 다음 3축 구조를 가진다.
+
+## Signal Mode
+
+무엇을 저장할 것인가?
+
+예)
+
+```text
+theta_err
+
+wo_hat
+
+wr_hat
+
+Ide
+
+IdeRef
+```
+
+---
+
+## Trigger Mode
+
+언제를 기준 시점으로 잡을 것인가?
+
+예)
+
+```text
+FOC_START
+
+FOC_COMPLETE
+
+IF_OK
+```
+
+---
+
+## Capture Start Mode
+
+언제 저장을 시작할 것인가?
+
+예)
+
+```text
+즉시
+
+100ms 후
+
+값 안정 이후
+```
+
+---
+
+# 3. Porting 개요
+
+## 기존 구조
+
+```c
+test1[4064]
+test2[4064]
+test3[4064]
+test4[4064]
+```
+
+---
+
+구조
+
+```text
+16 bit
+
+4 CH
+
+4064 Samples
+```
+
+---
+
+총 메모리
+
+```text
+4064 × 2 × 4
+
 =
-Golden Reference
-```
 
-## 대상
-
-```text
-Renesas RX26T
+32512 Byte
 ```
 
 ---
 
-# 유지한 항목
-
-```text
-Signal Mode
-
-Trigger Mode
-
-Capture Start Mode
-
-Trace State Machine
-
-Stable Trigger
-
-Value Stable
-
-Time Delay
-
-Python Viewer
-```
-
----
-
-# 변경한 항목
-
-```text
-Signal Source
-
-Trigger Hook 위치
-
-Buffer 구현 방식
-
-RAM Allocation
-```
-
----
-
-# 3. DD_INV_Tracer.h 변경 내용
-
-## 추가
-
-### Signal Mode 정의
+## 신규 구조
 
 ```c
-TRACER_SIGNAL_MANUAL
-
-TRACER_SIGNAL_DQ_INPUT
-
-TRACER_SIGNAL_EEMF_RAW
-
-TRACER_SIGNAL_EEMF_FILTERED
-
-TRACER_SIGNAL_THETA_ERROR
-
-TRACER_SIGNAL_PLL_OUTPUT
-
-TRACER_SIGNAL_SPEED_ESTIMATION
-
-TRACER_SIGNAL_ANGLE_ESTIMATION
-
-TRACER_SIGNAL_PHASE_CURRENT
-
-TRACER_SIGNAL_ALIGN_D_CURRENT
+tracer_ch1[4064]
+tracer_ch2[4064]
 ```
 
 ---
 
-### Trigger Mode 정의
-
-```c
-TRACER_TRIGGER_MANUAL
-
-TRACER_TRIGGER_EEMF_FIRST_CALL
-
-TRACER_TRIGGER_IF_OK
-
-TRACER_TRIGGER_FOC_START
-
-TRACER_TRIGGER_FOC_COMPLETE
-
-TRACER_TRIGGER_SPEED_CHANGE
-
-TRACER_TRIGGER_STABLE
-
-TRACER_TRIGGER_ALIGN_START
-
-TRACER_TRIGGER_IF_START
-
-TRACER_TRIGGER_ALIGN_CURRENT_START
-```
-
----
-
-### Capture Start Mode 정의
-
-```c
-TRACER_CAPTURE_START_IMMEDIATE
-
-TRACER_CAPTURE_START_TIME_DELAY
-
-TRACER_CAPTURE_START_VALUE_STABLE
-```
-
----
-
-### Tracer RAM 선언
-
-기존
-
-```c
-test1
-test2
-test3
-test4
-```
-
-사용 중지
-
-신규
-
-```c
-extern volatile SLong tracer_ch1[];
-
-extern volatile SLong tracer_ch2[];
-```
-
----
-
-### Condition Signal 추가
-
-```c
-TRACER_CONDITION_B_WE_EST
-
-TRACER_CONDITION_WO_HAT_LOGGED
-
-TRACER_CONDITION_WR_HAT_LOGGED
-
-TRACER_CONDITION_SPEED_GAP_LOGGED
-
-TRACER_CONDITION_THETA_ERROR
-
-TRACER_CONDITION_B_IDE
-
-TRACER_CONDITION_B_IDE_REF
-
-TRACER_CONDITION_MAX_PHASE_CURRENT
-
-TRACER_CONDITION_INPUT_TARGET
-```
-
----
-
-# 4. DD_INV_Tracer.c 변경 내용
-
-## 변경 전
-
-```text
-test1
-test2
-test3
-test4
-```
-
-16bit 기반 임시 구조
-
----
-
-## 변경 후
-
-```c
-volatile SLong tracer_ch1[TRACER_LOG_SIZE];
-
-volatile SLong tracer_ch2[TRACER_LOG_SIZE];
-```
-
----
-
-## 버퍼 구조
+구조
 
 ```text
 32 bit
 
 2 CH
+
+4064 Samples
 ```
 
 ---
 
-## 기록 함수
-
-```c
-Tracer_Record()
-```
-
-유지
-
----
-
-## Trigger 함수
-
-```c
-Tracer_Trigger()
-```
-
-유지
-
----
-
-## 제어 함수
-
-```c
-Tracer_Start()
-
-Tracer_Stop()
-```
-
-유지
-
----
-
-## Service 함수
-
-```c
-Tracer_MonitorService_1ms()
-```
-
-유지
-
----
-
-## Stable Trigger
-
-```c
-Tracer_StableService_1ms()
-```
-
-이식
-
----
-
-## Value Stable
-
-```c
-Tracer_ReadConditionValue()
-```
-
-이식
-
----
-
-## RAM 사용량
+총 메모리
 
 ```text
-4064 samples
-
-×
-
-4 bytes
-
-×
-
-2 channels
+4064 × 4 × 2
 
 =
 
-32512 bytes
+32512 Byte
 ```
 
 ---
 
-# 5. DD_INV_PWM.c 변경 내용
+동일 메모리 용량 유지
+
+Observer 내부 32bit 신호 저장 가능
+
+---
+
+# 4. DD_INV_Tracer.h 변경 내용
+
+## Signal Mode
+
+```text
+0 MANUAL
+
+1 DQ_INPUT
+
+2 EEMF_RAW
+
+3 EEMF_FILTER
+
+4 THETA_ERROR
+
+5 PLL_OUTPUT
+
+6 SPEED_ESTIMATION
+
+7 ANGLE_ESTIMATION
+
+8 PHASE_CURRENT
+
+9 ALIGN_D_CURRENT
+```
+
+---
+
+## Trigger Mode
+
+```text
+0 MANUAL
+
+1 EEMF_FIRST_CALL
+
+2 IF_OK
+
+3 FOC_START
+
+4 FOC_COMPLETE
+
+5 SPEED_CHANGE
+
+6 STABLE
+
+7 ALIGN_START
+
+8 IF_START
+
+9 ALIGN_CURRENT_START
+```
+
+---
+
+## Capture Mode
+
+```text
+0 IMMEDIATE
+
+1 TIME_DELAY
+
+2 VALUE_STABLE
+```
+
+---
+
+# 5. DD_INV_Tracer.c 변경 내용
+
+## Buffer
+
+```c
+volatile SLong tracer_ch1[4064];
+volatile SLong tracer_ch2[4064];
+```
+
+---
+
+## 추가 기능
+
+### Trigger Event
+
+```text
+수동 시작
+
+자동 Trigger
+
+Delay Trigger
+
+Stable Trigger
+```
+
+---
+
+### Service
+
+```text
+1ms Monitor Service
+
+Time Delay
+
+Value Stable
+
+Stable Trigger
+```
+
+---
+
+# 6. DD_INV_PWM.c 변경 내용
+
+Tracer와 실제 센서리스 제어를 연결하였다.
+
+즉
+
+```text
+Observer
+
+PLL
+
+Current Control
+
+Transition Logic
+```
+
+와 연결된다.
+
+---
+
+# 7. Trigger 의미
 
 ## Trigger 1
 
-### EEMF_FIRST_CALL
+EEMF_FIRST_CALL
 
-위치
+---
+
+발생 위치
 
 ```c
 DD_EEMF_sensorless()
@@ -332,23 +306,29 @@ DD_EEMF_sensorless()
 
 ---
 
-추가
+의미
 
-```c
-Tracer_Trigger(
-    TRACER_TRIGGER_EEMF_FIRST_CALL,
-    (Word)B_WeEst,
-    (Word)Input_Target
-);
+```text
+Observer 최초 시작
 ```
 
 ---
 
-# Trigger 2
+분석 목적
 
-## IF_OK
+```text
+센서리스 계산 시작
+```
 
-위치
+---
+
+## Trigger 2
+
+IF_OK
+
+---
+
+발생 위치
 
 ```c
 DD_IF_pwm_int_start_fail()
@@ -356,548 +336,616 @@ DD_IF_pwm_int_start_fail()
 
 ---
 
-조건
+의미
 
-```c
-IF_Fan_locking >= IF_Fan_locking_limit
+```text
+IF 기동 성공
 ```
 
 ---
 
-추가
+분석 목적
 
-```c
-Tracer_Trigger(
-    TRACER_TRIGGER_IF_OK,
-    (Word)B_WeEst,
-    (Word)rpm_tgt
-);
+```text
+Observer 사용 가능 여부
 ```
 
 ---
 
-# Trigger 3
+## Trigger 3
 
-## FOC_START
-
-위치
-
-```c
-DD_IF_transition()
-```
+FOC_START
 
 ---
 
-조건
+의미
 
-```c
-f_sensorless = 2
-
-IF_transition = 1
-```
-
-직전
-
----
-
-추가
-
-```c
-Tracer_Trigger(
-    TRACER_TRIGGER_FOC_START,
-    (Word)B_WeEst,
-    (Word)rpm_tgt
-);
-```
-
----
-
-# Trigger 4
-
-## FOC_COMPLETE
-
-위치
-
-```c
-DD_EEMF_Current_Control()
-```
-
----
-
-조건
-
-```c
-IF_transition
-
-1
+```text
+강제각
 
 ↓
 
-0
+센서리스 각도
+```
+
+전환 시작
+
+---
+
+분석 목적
+
+```text
+탈조 발생 구간
 ```
 
 ---
 
-추가
+## Trigger 4
 
-```c
-Tracer_Trigger(
-    TRACER_TRIGGER_FOC_COMPLETE,
-    (Word)B_WeEst,
-    (Word)rpm_tgt
-);
+FOC_COMPLETE
+
+---
+
+의미
+
+```text
+전환 완료
 ```
 
 ---
 
-# Trigger 9
+분석 목적
 
-## ALIGN_CURRENT_START
-
-위치
-
-```c
-DD_EEMF_pwm_int()
+```text
+FOC 안정성 검토
 ```
 
 ---
 
-조건
+## Trigger 9
 
-```c
-B_IdeRef
+ALIGN_CURRENT_START
 
-+
+---
 
-실제 상전류 존재
+의미
+
+```text
+실제 D축 전류 흐름 시작
 ```
 
 ---
 
-추가
+분석 목적
 
-```c
-Tracer_Trigger(
-    TRACER_TRIGGER_ALIGN_CURRENT_START,
-    (Word)B_WeEst,
-    (Word)rpm_tgt
-);
+```text
+Align 전류 확인
 ```
 
 ---
 
-# Signal Mode 이식
-
-## Mode 0
-
-```c
-theta_err_mori
-
-wr_hat_mori >> 6
-```
-
----
-
-## Mode 1
-
-```c
-IDS_mori
-
-IQS_mori
-```
-
----
-
-## Mode 2
-
-```c
-Error_VDS_sl
-
-Error_VQS_sl
-```
-
----
-
-## Mode 3
-
-```c
-Error_VDS_hat_sl
-
-Error_VQS_hat_sl
-```
-
----
+# 8. Signal Mode 의미
 
 ## Mode 4
 
-```c
-theta_err_mori
+Theta Error
 
-Error_sum_mori >> 6
+```text
+theta_err
+
+Error_sum
+```
+
+---
+
+관찰 목적
+
+```text
+PLL 상태
+```
+
+---
+
+정상
+
+```text
+0으로 수렴
+```
+
+---
+
+비정상
+
+```text
+진동
+
+발산
+
+포화
 ```
 
 ---
 
 ## Mode 5
 
-```c
-theta_err_mori
+PLL Output
 
-wo_hat_mori >> 6
+```text
+theta_err
+
+wo_hat
+```
+
+---
+
+관찰 목적
+
+```text
+PLL 응답
 ```
 
 ---
 
 ## Mode 6
 
-```c
-wo_hat_mori >> 6
+Speed Estimation
 
-wr_hat_mori >> 6
+```text
+wo_hat
+
+wr_hat
 ```
 
 ---
 
-## Mode 7
+관찰 목적
 
-```c
-theta_mori
-
-theta_err_mori
+```text
+속도 추정 안정성
 ```
 
 ---
 
-## Mode 8
+정상
 
-```c
-B_Ias
+```text
+두 곡선 수렴
+```
 
-B_Ibs
+---
+
+비정상
+
+```text
+지속적인 Gap
 ```
 
 ---
 
 ## Mode 9
 
-```c
-B_IdeRef
+Align D Current
 
-B_Ide
+```text
+IdeRef
+
+Ide
 ```
 
 ---
 
-# 6. Scale 정리
-
-## 확인 완료
-
-### Speed
-
-```c
-B_WeEst
-```
+관찰 목적
 
 ```text
-rpm = count × 0.15
+Align Current 추종
 ```
 
 ---
 
-```c
-wo_hat_mori >> 6
-```
+정상
 
 ```text
-rpm = count × 0.01845703125
+Ide ≈ IdeRef
 ```
 
 ---
 
-```c
-wr_hat_mori >> 6
-```
+비정상
 
 ```text
-rpm = count × 0.01845703125
+무응답
+
+과도 진동
+
+포화
 ```
 
 ---
 
-### Current
+# 9. Scale
 
-```c
-B_Ias
-
-B_Ibs
-
-B_Ics
-```
+## Current
 
 ```text
-A = count / 2048
-```
-
----
-
-```c
-B_Ide
-
-B_Iqe
-```
-
-```text
-A = count / 2048
-```
-
----
-
-### Angle
-
-```c
-theta_err_mori
-```
-
-```text
-deg_e
+A
 
 =
 
-count × 180
+count / 2048
+```
+
+---
+
+## Observer Speed
+
+```text
+rpm
+
+=
+
+logged count
+
+×
+
+0.01845703125
+```
+
+---
+
+## B_WeEst
+
+```text
+rpm
+
+=
+
+count × 0.15
+```
+
+---
+
+## Theta Error
+
+```text
+deg
+
+=
+
+count ×180
 
 /
 
-(PI × 8192)
+(pi×8192)
 ```
 
 ---
 
-## 보류
+# 10. 센서리스 제어 관점 검증
 
-```c
-IDS_mori
-
-IQS_mori
-
-Error_VDS_*
-
-Error_VQS_*
-
-Error_sum_mori
-```
-
-현재 Count 유지
-
----
-
-# 7. 샘플링 정책
-
-## Panasonic
+센서리스 기동은 다음 4단계로 해석한다.
 
 ```text
-PWM = 250 us
-
-Decimation = 4
+Align
 
 ↓
 
-1 ms/sample
+I/F Startup
+
+↓
+
+FOC Transition
+
+↓
+
+Stable Sensorless
 ```
 
 ---
 
-## RX26T
+# 11. 검증 순서
+
+## STEP 1
+
+Framework 검증
 
 ```text
-PWM = 62.5 us
+Manual Trigger
 ```
 
 ---
-
-### 표준
-
-```c
-tracer_sample_decimation = 16;
-```
-
-```text
-1 ms/sample
-```
-
----
-
-### 고속 분석
-
-```c
-tracer_sample_decimation = 4;
-```
-
-```text
-250 us/sample
-```
-
----
-
-### 장시간 분석
-
-```c
-tracer_sample_decimation = 64;
-```
-
-```text
-4 ms/sample
-```
-
----
-
-# 8. 검증 절차
-
-## Step 1
-
-Watch
-
-```text
-tracer_monitor_enable = 1
-```
-
-설정
-
----
-
-## Step 2
-
-Signal 선택
-
-예
-
-```text
-tracer_signal_mode = 4
-```
-
----
-
-## Step 3
-
-Trigger 선택
-
-예
-
-```text
-tracer_trigger_mode = 3
-```
-
----
-
-## Step 4
-
-운전
-
----
-
-## Step 5
 
 확인
 
 ```text
 tracer_enable
 
-tracer_index
-
 tracer_done
 
-tracer_sequence
+tracer_index
 ```
 
 ---
 
-## Step 6
-
-배열 확인
+PASS
 
 ```text
-tracer_ch1[0]
+index=4064
 
-tracer_ch2[0]
+done=1
 ```
 
 ---
 
-## Step 7
+## STEP 2
 
-CSV Export
+Signal 검증
 
----
-
-## Step 8
-
-Python Viewer 분석
-
----
-
-# 9. 우선 검증 항목
-
-## Test 1
+Mode
 
 ```text
-Trigger 1
+0~9
+```
 
-Signal 4
+전부 확인
+
+---
+
+## STEP 3
+
+Trigger 검증
+
+```text
+1
+
+2
+
+3
+
+4
+
+9
+```
+
+확인
+
+---
+
+PASS
+
+```text
+상승 Edge 1회
 ```
 
 ---
 
-## Test 2
+## STEP 4
+
+FOC Transition 해석
+
+권장
 
 ```text
 Trigger 3
 
-Signal 4
+Mode 4
 ```
 
 ---
 
-## Test 3
+분석
+
+```text
+theta_err
+
+Error_sum
+```
+
+---
+
+정상
+
+```text
+theta_err 감소
+```
+
+---
+
+비정상
+
+```text
+theta_err 발산
+```
+
+---
+
+## STEP 5
+
+PLL 분석
+
+권장
 
 ```text
 Trigger 3
 
-Signal 6
+Mode 6
 ```
 
 ---
 
-## Test 4
+정상
 
 ```text
-Trigger 4
+wo_hat
 
-Signal 6
+↓
+
+wr_hat
+
+수렴
 ```
 
 ---
 
-## Test 5
+비정상
+
+```text
+Gap 지속
+```
+
+---
+
+## STEP 6
+
+Align 검증
+
+권장
 
 ```text
 Trigger 9
 
-Signal 9
+Mode 9
 ```
+
+---
+
+정상
+
+```text
+IdeRef
+
+↓
+
+Ide 추종
+```
+
+---
+
+비정상
+
+```text
+Current saturation
+```
+
+---
+
+# 12. 탈조 판정 기준
+
+다음 중 하나 이상 발생
+
+```text
+theta_err 발산
+
+PLL 포화
+
+wo_hat 급반전
+
+wr_hat 급락
+
+Current 급증
+
+FOC 전환 직후 재시동
+```
+
+---
+
+판정
+
+```text
+Sensorless Transition Fail
+```
+
+---
+
+# 13. 최종 완료 조건
+
+## Build
+
+```text
+Error = 0
+```
+
+---
+
+## Trigger
+
+```text
+1
+
+2
+
+3
+
+4
+
+9
+```
+
+PASS
+
+---
+
+## Signal
+
+```text
+0~9
+```
+
+PASS
+
+---
+
+## CSV Export
+
+PASS
+
+---
+
+## Python Viewer
+
+PASS
+
+---
+
+## 반복성
+
+3회 이상 동일 결과
+
+PASS
 
 ---
 
 # 최종 결론
 
-✅ Panasonic Tracer Framework를 RX26T에 1차 포팅 완료
+이번 RX26T Tracer는
 
-✅ 32bit 2CH 구조 적용 완료
+```text
+Panasonic Tracer Framework
 
-✅ Signal Mode 이식 완료
+↓
 
-✅ Trigger Hook 이식 완료
+Renesas RX26T
+```
 
-✅ Build / Link 성공
+로 성공적으로 포팅되었다.
 
-✅ 다음 단계는 Trigger 검증 → CSV Export → Python Viewer 검증
+핵심 목적은
 
-✅ 현재부터는 개발 단계가 아닌 검증 단계이다.
+```text
+Align
+
+I/F Startup
+
+FOC Transition
+
+Stable Sensorless
+```
+
+구간을 정량적으로 분석하여
+
+센서리스 기동 실패,
+PLL 불안정,
+Gain 과대/과소,
+Motor Parameter 불일치,
+Current Sensing 이상
+
+등을 진단하는 것이다.
